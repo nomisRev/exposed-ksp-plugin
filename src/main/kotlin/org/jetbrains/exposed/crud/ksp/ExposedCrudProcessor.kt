@@ -294,6 +294,7 @@ class ExposedCrudProcessor(
         // Add necessary imports for Exposed DSL
         fileBuilder.addImport("org.jetbrains.exposed.sql", "insert")
         fileBuilder.addImport("org.jetbrains.exposed.sql", "batchInsert")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "update")
         fileBuilder.addImport("org.jetbrains.exposed.sql", "selectAll")
         fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "eq")
         fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "inList")
@@ -303,6 +304,9 @@ class ExposedCrudProcessor(
         
         // Generate insertAll function
         generateInsertAllFunction(fileBuilder, tableName, entityName, newEntityName, analysis)
+        
+        // Generate update function
+        generateUpdateFunction(fileBuilder, tableName, entityName, updateEntityName, analysis)
     }
     
     private fun generateInsertFunction(
@@ -405,6 +409,54 @@ class ExposedCrudProcessor(
             .build()
         
         fileBuilder.addFunction(insertAllFunction)
+    }
+    
+    private fun generateUpdateFunction(
+        fileBuilder: FileSpec.Builder,
+        tableName: String,
+        entityName: String,
+        updateEntityName: String,
+        analysis: TableAnalysis
+    ) {
+        val primaryKey = analysis.primaryKey
+        if (primaryKey == null) {
+            logger.error("Cannot generate update function without primary key")
+            return
+        }
+        
+        val nonPrimaryColumns = analysis.columns.filter { it != analysis.primaryKey }
+        
+        // Build the update assignments (only for non-null values)
+        val updateAssignments = nonPrimaryColumns.joinToString("\n        ") { column ->
+            "if (update.${column.name} != null) it[${column.name}] = update.${column.name}!!"
+        }
+        
+        // Build the entity constructor call
+        val entityConstructor = analysis.columns.joinToString(",\n            ") { column ->
+            "row[${column.name}]"
+        }
+        
+        val updateFunction = FunSpec.builder("update")
+            .receiver(ClassName("", tableName))
+            .addParameter("entityId", primaryKey.kotlinType)
+            .addParameter("update", ClassName("", updateEntityName))
+            .returns(ClassName("", entityName))
+            .addCode(
+                """
+                update({ ${primaryKey.name} eq entityId }) {
+                    $updateAssignments
+                }
+                
+                return selectAll().where { ${primaryKey.name} eq entityId }.map { row ->
+                    $entityName(
+                        $entityConstructor
+                    )
+                }.single()
+                """.trimIndent()
+            )
+            .build()
+        
+        fileBuilder.addFunction(updateFunction)
     }
 }
 

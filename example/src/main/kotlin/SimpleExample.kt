@@ -51,6 +51,15 @@ fun main() {
         val insertedBatch = SimpleUsersTable.insertAll(batchUsers)
         println("Inserted batch of ${insertedBatch.size} users: $insertedBatch")
         
+        // Test update function
+        val updateData = UpdateSimpleUsers(
+            name = "John Updated",
+            email = null // Keep existing email
+        )
+        
+        val updatedUser = SimpleUsersTable.update(insertedUser.id, updateData)
+        println("Updated user: $updatedUser")
+        
         println("\n=== Generated Code Demo ===")
         println("✅ Generated and working:")
         println("- data class NewSimpleUsers(val name: String, val email: String)")
@@ -58,6 +67,7 @@ fun main() {
         println("- data class SimpleUsers(val id: Int, val name: String, val email: String)")
         println("- fun SimpleUsersTable.insert(new: NewSimpleUsers): SimpleUsers")
         println("- fun SimpleUsersTable.insertAll(new: List<NewSimpleUsers>): List<SimpleUsers>")
+        println("- fun SimpleUsersTable.update(id: Int, update: UpdateSimpleUsers): SimpleUsers")
         
         println("\nCheck build/generated/ksp/main/kotlin/ for the actual generated files!")
     }
