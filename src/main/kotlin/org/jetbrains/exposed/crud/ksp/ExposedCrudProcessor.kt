@@ -13,89 +13,89 @@ class ExposedCrudProcessor(
 
     override fun process(resolver: Resolver): List<KSAnnotated> {
         val tableSymbols = resolver.getSymbolsWithAnnotation("org.jetbrains.exposed.crud.ksp.GenerateCrud")
-        
+
         tableSymbols.forEach { symbol ->
             if (symbol is KSClassDeclaration) {
                 processTable(symbol)
             }
         }
-        
+
         return emptyList()
     }
-    
+
     private fun processTable(tableClass: KSClassDeclaration) {
         try {
-            val tableName = tableClass.simpleName.asString()
-            val packageName = tableClass.packageName.asString()
-            
+
+            val tableName = ClassName(tableClass.packageName.asString(), tableClass.simpleName.asString())
+            val tableAnalysis = analyzeTable(tableName, tableClass)
+
             logger.info("Processing table: $tableName")
-            
-            val tableAnalysis = analyzeTable(tableClass)
-            generateCrudCode(packageName, tableName, tableAnalysis)
-            
+
+            generateCrudCode(tableAnalysis)
+
         } catch (e: Exception) {
             logger.error("Error processing table ${tableClass.simpleName.asString()}: ${e.message}")
         }
     }
-    
-    private fun analyzeTable(tableClass: KSClassDeclaration): TableAnalysis {
+
+    private fun analyzeTable(table: ClassName, tableClass: KSClassDeclaration): TableAnalysis {
         val columns = mutableListOf<ColumnInfo>()
         var primaryKeyColumn: ColumnInfo? = null
         val uniqueIndexColumns = mutableListOf<ColumnInfo>()
-        
-        // Analyze table properties
+
         tableClass.getAllProperties().forEach { property ->
             val columnInfo = analyzeColumn(property)
             if (columnInfo != null) {
                 columns.add(columnInfo)
-                
+
                 // Check if this is the primary key
                 if (isPrimaryKey(tableClass, property)) {
                     primaryKeyColumn = columnInfo
                 }
-                
+
                 // Check if this has unique index
                 if (hasUniqueIndex(property)) {
                     uniqueIndexColumns.add(columnInfo)
                 }
             }
         }
-        
+
         return TableAnalysis(
             columns = columns,
-            primaryKey = primaryKeyColumn,
-            uniqueIndexColumns = uniqueIndexColumns
+            primaryKey = requireNotNull(primaryKeyColumn) { "No primary key found for table ${tableClass.simpleName.asString()}" },
+            uniqueIndexColumns = uniqueIndexColumns,
+            table = table,
         )
     }
-    
+
     private fun analyzeColumn(property: KSPropertyDeclaration): ColumnInfo? {
         val name = property.simpleName.asString()
         val type = property.type.resolve()
-        
+
         // Skip non-column properties - these are internal Exposed properties
         val skipProperties = setOf(
-            "primaryKey", "tableName", "columns", "ddl", "fields", "foreignKeys", 
+            "primaryKey", "tableName", "columns", "ddl", "fields", "foreignKeys",
             "indices", "realFields", "schemaName", "sequences", "source", "autoIncColumn"
         )
         if (name in skipProperties) return null
-        
+
         // Only process properties that return Column types
         val returnTypeName = type.declaration.simpleName.asString()
         if (!returnTypeName.contains("Column")) return null
-        
+
         val kotlinType = mapExposedTypeToKotlin(type)
         val isNullable = isColumnNullable(property)
-        
+
         logger.info("Column $name: type=$returnTypeName, kotlinType=$kotlinType, nullable=$isNullable")
         logger.info("Property string: ${property}")
-        
+
         return ColumnInfo(
             name = name,
             kotlinType = kotlinType,
             isNullable = isNullable
         )
     }
-    
+
     private fun mapExposedTypeToKotlin(type: KSType): TypeName {
         // Look at the type arguments to determine the actual Kotlin type
         val typeArgs = type.arguments
@@ -116,7 +116,7 @@ class ExposedCrudProcessor(
                 }
             }
         }
-        
+
         // Fallback: try to infer from the column type name
         val typeName = type.declaration.simpleName.asString().lowercase()
         return when {
@@ -130,11 +130,11 @@ class ExposedCrudProcessor(
             else -> STRING // Default fallback
         }
     }
-    
+
     private fun isColumnNullable(property: KSPropertyDeclaration): Boolean {
         val propertyName = property.simpleName.asString()
         val type = property.type.resolve()
-        
+
         // Check if the Column's type parameter is nullable
         // For Column<Int?> vs Column<Int>, we need to look at the first type argument
         val typeArgs = type.arguments
@@ -147,66 +147,65 @@ class ExposedCrudProcessor(
                 return isNullable
             }
         }
-        
+
         // Fallback for known nullable fields in our example
         val knownNullableFields = setOf("age", "description")
         val isKnownNullable = propertyName in knownNullableFields
-        
+
         logger.info("Property $propertyName: using fallback nullable=$isKnownNullable")
-        
+
         return isKnownNullable
     }
-    
+
     private fun isPrimaryKey(tableClass: KSClassDeclaration, property: KSPropertyDeclaration): Boolean {
         // Look for primaryKey override that references this property
         val primaryKeyProperty = tableClass.getAllProperties()
             .find { it.simpleName.asString() == "primaryKey" }
-        
+
         val propertyName = property.simpleName.asString()
         val isPrimary = primaryKeyProperty?.toString()?.contains(propertyName) == true
-        
+
         // For demo purposes, also treat 'id' as primary key
         val isIdColumn = propertyName == "id"
-        
+
         logger.info("Property $propertyName: isPrimary=$isPrimary, isIdColumn=$isIdColumn")
-        
+
         return isPrimary || isIdColumn
     }
-    
+
     private fun hasUniqueIndex(property: KSPropertyDeclaration): Boolean {
         return property.toString().contains(".uniqueIndex()")
     }
-    
-    private fun generateCrudCode(packageName: String, tableName: String, analysis: TableAnalysis) {
-        val entityName = tableName.removeSuffix("Table")
-        val newEntityName = "New$entityName"
-        val updateEntityName = "Update$entityName"
-        
-        val fileBuilder = FileSpec.builder(packageName, "${entityName}Crud")
-        
-        // Add BigDecimal import if needed
-        val needsBigDecimal = analysis.columns.any { 
-            it.kotlinType.toString().contains("BigDecimal") 
+
+    private fun generateCrudCode(analysis: TableAnalysis) {
+        val entity = ClassName(analysis.packageName, analysis.table.simpleName.removeSuffix("Table"))
+        val newEntity = ClassName(analysis.packageName, "New$entity")
+        val updateEntity = ClassName(analysis.packageName, "Update$entity")
+
+        val fileBuilder = FileSpec.builder(analysis.packageName, "${entity}Crud")
+
+        val needsBigDecimal = analysis.columns.any {
+            it.kotlinType.toString().contains("BigDecimal")
         }
         if (needsBigDecimal) {
             fileBuilder.addImport("java.math", "BigDecimal")
         }
-        
+
         // Generate data classes
-        generateDataClasses(fileBuilder, entityName, newEntityName, updateEntityName, analysis)
-        
+        generateDataClasses(fileBuilder, entity, newEntity, updateEntity, analysis)
+
         // Generate CRUD extension functions
-        generateCrudFunctions(fileBuilder, tableName, entityName, newEntityName, updateEntityName, analysis)
-        
+        generateCrudFunctions(fileBuilder, analysis.table, entity, newEntity, updateEntity, analysis)
+
         val file = fileBuilder.build()
         file.writeTo(codeGenerator, Dependencies(false))
     }
-    
+
     private fun generateDataClasses(
         fileBuilder: FileSpec.Builder,
-        entityName: String,
-        newEntityName: String,
-        updateEntityName: String,
+        entityName: ClassName,
+        newEntityName: ClassName,
+        updateEntityName: ClassName,
         analysis: TableAnalysis
     ) {
         // Generate NewEntity data class (non-nullable columns except primary key)
@@ -217,7 +216,7 @@ class ExposedCrudProcessor(
                     .initializer(column.name)
                     .build()
             }
-        
+
         fileBuilder.addType(
             TypeSpec.classBuilder(newEntityName)
                 .addModifiers(KModifier.DATA)
@@ -233,7 +232,7 @@ class ExposedCrudProcessor(
                 .addProperties(newEntityProperties)
                 .build()
         )
-        
+
         // Generate UpdateEntity data class (all nullable except primary key)
         val updateEntityProperties = analysis.columns
             .filter { it != analysis.primaryKey }
@@ -242,7 +241,7 @@ class ExposedCrudProcessor(
                     .initializer(column.name)
                     .build()
             }
-        
+
         fileBuilder.addType(
             TypeSpec.classBuilder(updateEntityName)
                 .addModifiers(KModifier.DATA)
@@ -258,14 +257,14 @@ class ExposedCrudProcessor(
                 .addProperties(updateEntityProperties)
                 .build()
         )
-        
+
         // Generate Entity data class (all columns)
         val entityProperties = analysis.columns.map { column ->
             PropertySpec.builder(column.name, column.kotlinType.copy(nullable = column.isNullable))
                 .initializer(column.name)
                 .build()
         }
-        
+
         fileBuilder.addType(
             TypeSpec.classBuilder(entityName)
                 .addModifiers(KModifier.DATA)
@@ -282,189 +281,141 @@ class ExposedCrudProcessor(
                 .build()
         )
     }
-    
+
     private fun generateCrudFunctions(
         fileBuilder: FileSpec.Builder,
-        tableName: String,
-        entityName: String,
-        newEntityName: String,
-        updateEntityName: String,
+        tableName: ClassName,
+        entityName: ClassName,
+        newEntityName: ClassName,
+        updateEntityName: ClassName,
         analysis: TableAnalysis
     ) {
-        // Add necessary imports for Exposed DSL
-        fileBuilder.addImport("org.jetbrains.exposed.sql", "insert")
-        fileBuilder.addImport("org.jetbrains.exposed.sql", "batchInsert")
-        fileBuilder.addImport("org.jetbrains.exposed.sql", "update")
-        fileBuilder.addImport("org.jetbrains.exposed.sql", "selectAll")
-        fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "eq")
-        fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "inList")
-        
-        // Generate insert function
-        generateInsertFunction(fileBuilder, tableName, entityName, newEntityName, analysis)
-        
-        // Generate insertAll function
-        generateInsertAllFunction(fileBuilder, tableName, entityName, newEntityName, analysis)
-        
-        // Generate update function
-        generateUpdateFunction(fileBuilder, tableName, entityName, updateEntityName, analysis)
+        fileBuilder.addFunction(InsertFunSpec(tableName, newEntityName, analysis, entityName))
+        fileBuilder.addFunction(BatchInsertFunSpec(tableName, entityName, newEntityName, analysis))
+//        generateUpdateFunction(fileBuilder, tableName, entityName, updateEntityName, analysis)
     }
-    
-    private fun generateInsertFunction(
-        fileBuilder: FileSpec.Builder,
-        tableName: String,
-        entityName: String,
-        newEntityName: String,
-        analysis: TableAnalysis
-    ) {
-        val primaryKey = analysis.primaryKey
-        if (primaryKey == null) {
-            logger.error("Cannot generate insert function without primary key")
-            return
-        }
-        
+
+
+    fun CodeBlock.Builder.insertAssignment(analysis: TableAnalysis) = apply {
         val nonPrimaryColumns = analysis.columns.filter { it != analysis.primaryKey }
-        
-        // Build the insert assignments
-        val insertAssignments = nonPrimaryColumns.joinToString("\n        ") { column ->
+        for (column in nonPrimaryColumns) {
             if (column.isNullable) {
-                "if (new.${column.name} != null) it[${column.name}] = new.${column.name}"
+                addStatement(
+                    "if (new.${column.name} != null) it[%T.${column.name}] = new.${column.name}",
+                    analysis.table
+                )
             } else {
-                "it[${column.name}] = new.${column.name}"
+                addStatement("it[%T.${column.name}] = new.${column.name}", analysis.table)
             }
         }
-        
-        // Build the entity constructor call
-        val entityConstructor = analysis.columns.joinToString(",\n            ") { column ->
-            "row[${column.name}]"
-        }
-        
-        val insertFunction = FunSpec.builder("insert")
-            .receiver(ClassName("", tableName))
-            .addParameter("new", ClassName("", newEntityName))
-            .returns(ClassName("", entityName))
+    }
+
+    fun CodeBlock.Builder.entityConstructor(analysis: TableAnalysis) = apply {
+        for (column in analysis.columns) addStatement("${column.name} = row[%T.${column.name}],", analysis.table)
+    }
+
+
+    private fun InsertFunSpec(
+        tableName: ClassName,
+        newEntityName: ClassName,
+        analysis: TableAnalysis,
+        entity: ClassName
+    ): FunSpec =
+        FunSpec.builder("insert")
+            .receiver(tableName)
+            .addParameter("new", newEntityName)
+            .returns(entity)
             .addCode(
-                """
-                val insertedId = insert {
-                    $insertAssignments
-                }[${primaryKey.name}]
-                
-                return selectAll().where { ${primaryKey.name} eq insertedId }.map { row ->
-                    $entityName(
-                        $entityConstructor
+                CodeBlock.builder()
+                    .add("return ")
+                    .addStatement(
+                        "%T.%M {",
+                        tableName,
+                        MemberName("org.jetbrains.exposed.sql", "insertReturning")
                     )
-                }.single()
-                """.trimIndent()
+                    .withIndent { insertAssignment(analysis) }
+                    .addStatement("}.map { row ->")
+                    .withIndent {
+                        addStatement("%T(", entity)
+                        withIndent { entityConstructor(analysis) }
+                        addStatement(")")
+                    }
+                    .addStatement("}.single()")
+                    .build()
             )
             .build()
-        
-        fileBuilder.addFunction(insertFunction)
-    }
-    
-    private fun generateInsertAllFunction(
-        fileBuilder: FileSpec.Builder,
-        tableName: String,
-        entityName: String,
-        newEntityName: String,
+
+    private fun BatchInsertFunSpec(
+        tableName: ClassName,
+        entityName: ClassName,
+        newEntityName: ClassName,
         analysis: TableAnalysis
-    ) {
-        val primaryKey = analysis.primaryKey
-        if (primaryKey == null) {
-            logger.error("Cannot generate insertAll function without primary key")
-            return
-        }
-        
-        val nonPrimaryColumns = analysis.columns.filter { it != analysis.primaryKey }
-        
-        // Build the batch insert assignments
-        val batchInsertAssignments = nonPrimaryColumns.joinToString("\n            ") { column ->
-            if (column.isNullable) {
-                "if (item.${column.name} != null) this[${column.name}] = item.${column.name}"
-            } else {
-                "this[${column.name}] = item.${column.name}"
-            }
-        }
-        
-        // Build the entity constructor call
-        val entityConstructor = analysis.columns.joinToString(",\n            ") { column ->
-            "row[${column.name}]"
-        }
-        
-        val insertAllFunction = FunSpec.builder("insertAll")
-            .receiver(ClassName("", tableName))
-            .addParameter("new", ClassName("kotlin.collections", "List").parameterizedBy(ClassName("", newEntityName)))
-            .returns(ClassName("kotlin.collections", "List").parameterizedBy(ClassName("", entityName)))
+    ) =
+        FunSpec.builder("insertAll")
+            .receiver(tableName)
+            .addParameter("new", LIST.parameterizedBy(newEntityName))
+            .returns(LIST.parameterizedBy(entityName))
             .addCode(
-                """
-                val insertedIds = batchInsert(new) { item ->
-                    $batchInsertAssignments
-                }.map { it[${primaryKey.name}] }
-                
-                return selectAll().where { ${primaryKey.name} inList insertedIds }.map { row ->
-                    $entityName(
-                        $entityConstructor
-                    )
-                }
-                """.trimIndent()
+                CodeBlock.builder()
+                    .addStatement("%T.%M(new) { item ->", tableName, MemberName("org.jetbrains.exposed.sql", "batchInsert"))
+                    .withIndent { insertAssignment(analysis) }
+                    .addStatement("}.map { row ->")
+                    .withIndent {
+                        addStatement("%T(", entityName)
+                        withIndent { entityConstructor(analysis) }
+                        addStatement(")")
+                    }
+                    .addStatement("}")
+                    .build()
             )
             .build()
-        
-        fileBuilder.addFunction(insertAllFunction)
-    }
-    
+
+
     private fun generateUpdateFunction(
         fileBuilder: FileSpec.Builder,
-        tableName: String,
-        entityName: String,
-        updateEntityName: String,
+        tableName: ClassName,
+        entityName: ClassName,
+        updateEntityName: ClassName,
         analysis: TableAnalysis
     ) {
-        val primaryKey = analysis.primaryKey
-        if (primaryKey == null) {
-            logger.error("Cannot generate update function without primary key")
-            return
-        }
-        
-        val nonPrimaryColumns = analysis.columns.filter { it != analysis.primaryKey }
-        
-        // Build the update assignments (only for non-null values)
-        val updateAssignments = nonPrimaryColumns.joinToString("\n        ") { column ->
-            "if (update.${column.name} != null) it[${column.name}] = update.${column.name}!!"
-        }
-        
-        // Build the entity constructor call
-        val entityConstructor = analysis.columns.joinToString(",\n            ") { column ->
-            "row[${column.name}]"
-        }
-        
+
         val updateFunction = FunSpec.builder("update")
-            .receiver(ClassName("", tableName))
-            .addParameter("entityId", primaryKey.kotlinType)
-            .addParameter("update", ClassName("", updateEntityName))
-            .returns(ClassName("", entityName))
+            .receiver(tableName)
+            .addParameter("entityId", analysis.primaryKey.kotlinType)
+            .addParameter("update", updateEntityName)
+            .returns(entityName)
             .addCode(
-                """
-                update({ ${primaryKey.name} eq entityId }) {
-                    $updateAssignments
-                }
-                
-                return selectAll().where { ${primaryKey.name} eq entityId }.map { row ->
-                    $entityName(
-                        $entityConstructor
+                CodeBlock.builder()
+                    .add("return ")
+                    .addStatement(
+                        "%T.%M(where = { ${analysis.primaryKey.name} eq entityId }) {",
+                        tableName,
+                        MemberName("org.jetbrains.exposed.sql", "updateReturning")
                     )
-                }.single()
-                """.trimIndent()
-            )
-            .build()
-        
+                    .withIndent { insertAssignment(analysis) }
+                    .addStatement("}.map { row ->")
+                    .withIndent {
+                        addStatement("%T(", entityName)
+                        withIndent { entityConstructor(analysis) }
+                        addStatement(")")
+                    }
+                    .addStatement("}")
+                    .build()
+            ).build()
+
         fileBuilder.addFunction(updateFunction)
     }
 }
 
 data class TableAnalysis(
+    val table: ClassName,
     val columns: List<ColumnInfo>,
-    val primaryKey: ColumnInfo?,
+    val primaryKey: ColumnInfo,
     val uniqueIndexColumns: List<ColumnInfo>
-)
+) {
+    val nonPrimaryColumns = columns.filter { it != primaryKey }
+    val packageName = table.packageName
+}
 
 data class ColumnInfo(
     val name: String,

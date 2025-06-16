@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.1.0"
-    id("com.google.devtools.ksp") version "2.1.0-1.0.29"
+    kotlin("jvm") version "2.1.21"
+    id("com.google.devtools.ksp") version "2.1.21-2.0.2"
 }
 
 group = "org.jetbrains"
@@ -13,21 +13,18 @@ repositories {
 
 dependencies {
     // KSP
-    implementation("com.google.devtools.ksp:symbol-processing-api:2.1.0-1.0.29")
+    implementation("com.google.devtools.ksp:symbol-processing-api:2.1.21-2.0.2")
     
     // Exposed
-    implementation("org.jetbrains.exposed:exposed-core:0.57.0")
-    implementation("org.jetbrains.exposed:exposed-dao:0.57.0")
-    implementation("org.jetbrains.exposed:exposed-jdbc:0.57.0")
+    implementation("org.jetbrains.exposed:exposed-core:0.61.0")
+    implementation("org.jetbrains.exposed:exposed-dao:0.61.0")
+    implementation("org.jetbrains.exposed:exposed-jdbc:0.61.0")
     
     // KotlinPoet for code generation
-    implementation("com.squareup:kotlinpoet:1.18.1")
-    implementation("com.squareup:kotlinpoet-ksp:1.18.1")
+    implementation("com.squareup:kotlinpoet:2.2.0")
+    implementation("com.squareup:kotlinpoet-ksp:2.2.0")
     
     testImplementation(kotlin("test"))
-    testImplementation("org.jetbrains.exposed:exposed-core:0.57.0")
-    testImplementation("org.jetbrains.exposed:exposed-dao:0.57.0")
-    testImplementation("org.jetbrains.exposed:exposed-jdbc:0.57.0")
     testImplementation("com.h2database:h2:2.2.224")
 }
 

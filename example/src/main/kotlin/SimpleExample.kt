@@ -1,5 +1,7 @@
 import org.jetbrains.exposed.crud.ksp.GenerateCrud
-import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.Database
+import org.jetbrains.exposed.sql.Table
+import org.jetbrains.exposed.sql.batchInsert
 import org.jetbrains.exposed.sql.transactions.transaction
 
 @GenerateCrud
@@ -15,12 +17,8 @@ fun main() {
     Database.connect("jdbc:h2:mem:simple;DB_CLOSE_DELAY=-1", driver = "org.h2.Driver")
     
     transaction {
-        // Enable SQL logging
-        addLogger(StdOutSqlLogger)
-        
-        // Create table
-        SchemaUtils.create(SimpleUsersTable)
-        
+//        SchemaUtils.create(SimpleUsersTable)
+
         println("=== Simple Exposed CRUD KSP Example ===\n")
         
         // Use the generated insert function!
@@ -48,8 +46,8 @@ fun main() {
             NewSimpleUsers("Carol Brown", "carol@example.com")
         )
         
-        val insertedBatch = SimpleUsersTable.insertAll(batchUsers)
-        println("Inserted batch of ${insertedBatch.size} users: $insertedBatch")
+//        val insertedBatch = SimpleUsersTable.insertAll(batchUsers)
+//        println("Inserted batch of ${insertedBatch.size} users: $insertedBatch")
         
         // Test update function
         val updateData = UpdateSimpleUsers(
@@ -57,8 +55,8 @@ fun main() {
             email = null // Keep existing email
         )
         
-        val updatedUser = SimpleUsersTable.update(insertedUser.id, updateData)
-        println("Updated user: $updatedUser")
+//        val updatedUser = SimpleUsersTable.update(insertedUser.id, updateData)
+//        println("Updated user: $updatedUser")
         
         println("\n=== Generated Code Demo ===")
         println("✅ Generated and working:")
