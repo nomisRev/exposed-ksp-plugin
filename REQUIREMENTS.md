@@ -32,7 +32,7 @@ fun UsersTable.insert(name: String, email: String, age: Int? = null): User =
 
 It should do so for all CRUD operations:
 
-- [ ] fun UsersTable.insert(new: NewUser): User
+- [x] fun UsersTable.insert(new: NewUser): User
 - [ ] fun UsersTable.insertAll(new: List<NewUser>): List<User>
 - [ ] fun UserTable.update(id: Int, update: UpdateUser): User
 - [ ] fun UsersTable.findByIdOrNull(id: Int): User?

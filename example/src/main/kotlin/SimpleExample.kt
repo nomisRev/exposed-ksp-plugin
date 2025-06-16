@@ -23,32 +23,28 @@ fun main() {
         
         println("=== Simple Exposed CRUD KSP Example ===\n")
         
-        // Manual insert to demonstrate the concept
-        val insertedId = SimpleUsersTable.insert {
-            it[name] = "John Doe"
-            it[email] = "john@example.com"
-        }[SimpleUsersTable.id]
+        // Use the generated insert function!
+        val newUser = NewSimpleUsers(
+            name = "John Doe",
+            email = "john@example.com"
+        )
         
-        println("Inserted user with ID: $insertedId")
+        val insertedUser = SimpleUsersTable.insert(newUser)
+        println("Inserted user using generated function: $insertedUser")
         
-        // Manual select to get the user back
-        val user = SimpleUsersTable.selectAll()
-            .where { SimpleUsersTable.id eq insertedId }
-            .map { row ->
-                // This is what the generated code would look like:
-                // SimpleUsers(
-                //     id = row[SimpleUsersTable.id],
-                //     name = row[SimpleUsersTable.name], 
-                //     email = row[SimpleUsersTable.email]
-                // )
-                "User(id=${row[SimpleUsersTable.id]}, name=${row[SimpleUsersTable.name]}, email=${row[SimpleUsersTable.email]})"
-            }.single()
+        // Test another user
+        val newUser2 = NewSimpleUsers(
+            name = "Jane Smith", 
+            email = "jane@example.com"
+        )
         
-        println("Retrieved user: $user")
+        val insertedUser2 = SimpleUsersTable.insert(newUser2)
+        println("Inserted second user: $insertedUser2")
         
         println("\n=== Generated Code Demo ===")
-        println("The KSP processor should generate:")
+        println("✅ Generated and working:")
         println("- data class NewSimpleUsers(val name: String, val email: String)")
+        println("- data class UpdateSimpleUsers(val name: String?, val email: String?)")
         println("- data class SimpleUsers(val id: Int, val name: String, val email: String)")
         println("- fun SimpleUsersTable.insert(new: NewSimpleUsers): SimpleUsers")
         

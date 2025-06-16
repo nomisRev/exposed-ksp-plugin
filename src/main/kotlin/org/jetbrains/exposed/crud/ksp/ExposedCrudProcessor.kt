@@ -290,35 +290,20 @@ class ExposedCrudProcessor(
         updateEntityName: String,
         analysis: TableAnalysis
     ) {
-        // For now, skip generating the insert function due to import complexity
-        // Focus on demonstrating the data class generation
+        // Add necessary imports for Exposed DSL
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "insert")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "selectAll")
+        fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "eq")
         
-        // Add a comment explaining what would be generated
-        fileBuilder.addType(
-            TypeSpec.objectBuilder("${entityName}CrudOperations")
-                .addKdoc(
-                    """
-                    CRUD operations for $entityName would be generated here.
-                    
-                    Example operations that would be generated:
-                    - fun ${tableName}.insert(new: $newEntityName): $entityName
-                    - fun ${tableName}.findById(id: Int): $entityName?
-                    - fun ${tableName}.update(id: Int, update: $updateEntityName): $entityName
-                    - fun ${tableName}.deleteById(id: Int): Boolean
-                    - fun ${tableName}.findAll(): List<$entityName>
-                    
-                    Currently only data class generation is implemented.
-                    """.trimIndent()
-                )
-                .build()
-        )
+        // Generate insert function
+        generateInsertFunction(fileBuilder, tableName, entityName, newEntityName, analysis)
     }
     
     private fun generateInsertFunction(
         fileBuilder: FileSpec.Builder,
-        tableType: ClassName,
-        entityType: ClassName,
-        newEntityType: ClassName,
+        tableName: String,
+        entityName: String,
+        newEntityName: String,
         analysis: TableAnalysis
     ) {
         val primaryKey = analysis.primaryKey
@@ -327,25 +312,37 @@ class ExposedCrudProcessor(
             return
         }
         
+        val nonPrimaryColumns = analysis.columns.filter { it != analysis.primaryKey }
+        
+        // Build the insert assignments
+        val insertAssignments = nonPrimaryColumns.joinToString("\n        ") { column ->
+            if (column.isNullable) {
+                "if (new.${column.name} != null) it[${column.name}] = new.${column.name}"
+            } else {
+                "it[${column.name}] = new.${column.name}"
+            }
+        }
+        
+        // Build the entity constructor call
+        val entityConstructor = analysis.columns.joinToString(",\n            ") { column ->
+            "row[${column.name}]"
+        }
+        
         val insertFunction = FunSpec.builder("insert")
-            .receiver(tableType)
-            .addParameter("new", newEntityType)
-            .returns(entityType)
+            .receiver(ClassName("", tableName))
+            .addParameter("new", ClassName("", newEntityName))
+            .returns(ClassName("", entityName))
             .addCode(
                 """
-                val insertedId = insert { 
-                    ${analysis.columns.filter { it != analysis.primaryKey }.joinToString("\n    ") { 
-                        "it[${it.name}] = new.${it.name}"
-                    }}
+                val insertedId = insert {
+                    $insertAssignments
                 }[${primaryKey.name}]
                 
-                return selectAll().single { ${primaryKey.name} eq insertedId }.let { row ->
-                    ${entityType.simpleName}(
-                        ${analysis.columns.joinToString(",\n        ") { 
-                            "row[${it.name}]"
-                        }}
+                return selectAll().where { ${primaryKey.name} eq insertedId }.map { row ->
+                    $entityName(
+                        $entityConstructor
                     )
-                }
+                }.single()
                 """.trimIndent()
             )
             .build()
