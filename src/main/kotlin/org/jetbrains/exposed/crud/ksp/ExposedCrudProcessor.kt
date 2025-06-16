@@ -290,22 +290,23 @@ class ExposedCrudProcessor(
         updateEntityName: ClassName,
         analysis: TableAnalysis
     ) {
-        fileBuilder.addFunction(InsertFunSpec(tableName, newEntityName, analysis, entityName))
-        fileBuilder.addFunction(BatchInsertFunSpec(tableName, entityName, newEntityName, analysis))
-//        generateUpdateFunction(fileBuilder, tableName, entityName, updateEntityName, analysis)
+        fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "eq")
+        fileBuilder.addFunction(InsertFunSpec(newEntityName, analysis, entityName))
+//        fileBuilder.addFunction(BatchInsertFunSpec(tableName, entityName, newEntityName, analysis))
+        fileBuilder.addFunction(UpdateFunSpec(entityName, updateEntityName, analysis))
     }
 
 
-    fun CodeBlock.Builder.insertAssignment(analysis: TableAnalysis) = apply {
+    fun CodeBlock.Builder.insertAssignment(param: String, analysis: TableAnalysis) = apply {
         val nonPrimaryColumns = analysis.columns.filter { it != analysis.primaryKey }
         for (column in nonPrimaryColumns) {
             if (column.isNullable) {
                 addStatement(
-                    "if (new.${column.name} != null) it[%T.${column.name}] = new.${column.name}",
+                    "if ($param.${column.name} != null) it[%T.${column.name}] = $param.${column.name}",
                     analysis.table
                 )
             } else {
-                addStatement("it[%T.${column.name}] = new.${column.name}", analysis.table)
+                addStatement("it[%T.${column.name}] = $param.${column.name}", analysis.table)
             }
         }
     }
@@ -316,94 +317,83 @@ class ExposedCrudProcessor(
 
 
     private fun InsertFunSpec(
-        tableName: ClassName,
         newEntityName: ClassName,
         analysis: TableAnalysis,
         entity: ClassName
     ): FunSpec =
         FunSpec.builder("insert")
-            .receiver(tableName)
+            .receiver(analysis.table)
             .addParameter("new", newEntityName)
             .returns(entity)
             .addCode(
                 CodeBlock.builder()
                     .add("return ")
-                    .addStatement(
+                    .beginControlFlow(
                         "%T.%M {",
-                        tableName,
+                        analysis.table,
                         MemberName("org.jetbrains.exposed.sql", "insertReturning")
                     )
-                    .withIndent { insertAssignment(analysis) }
-                    .addStatement("}.map { row ->")
-                    .withIndent {
-                        addStatement("%T(", entity)
-                        withIndent { entityConstructor(analysis) }
-                        addStatement(")")
-                    }
-                    .addStatement("}.single()")
+                    .insertAssignment("new", analysis)
+                    .endControlFlow()
+                    .mapResultRow(analysis, entity)
+                    .addStatement(".single()")
                     .build()
             )
             .build()
 
     private fun BatchInsertFunSpec(
-        tableName: ClassName,
-        entityName: ClassName,
-        newEntityName: ClassName,
+        entity: ClassName,
+        newEntity: ClassName,
         analysis: TableAnalysis
     ) =
         FunSpec.builder("insertAll")
-            .receiver(tableName)
-            .addParameter("new", LIST.parameterizedBy(newEntityName))
-            .returns(LIST.parameterizedBy(entityName))
+            .receiver(analysis.table)
+            .addParameter("new", LIST.parameterizedBy(newEntity))
+            .returns(LIST.parameterizedBy(entity))
             .addCode(
                 CodeBlock.builder()
-                    .addStatement("%T.%M(new) { item ->", tableName, MemberName("org.jetbrains.exposed.sql", "batchInsert"))
-                    .withIndent { insertAssignment(analysis) }
-                    .addStatement("}.map { row ->")
-                    .withIndent {
-                        addStatement("%T(", entityName)
-                        withIndent { entityConstructor(analysis) }
-                        addStatement(")")
-                    }
-                    .addStatement("}")
+                    .addStatement(
+                        "%T.%M(new) { item ->",
+                        analysis.table,
+                        MemberName("org.jetbrains.exposed.sql", "batchInsert")
+                    )
+                    .withIndent { insertAssignment("item", analysis) }
+                    .mapResultRow(analysis, entity)
                     .build()
             )
             .build()
 
 
-    private fun generateUpdateFunction(
-        fileBuilder: FileSpec.Builder,
-        tableName: ClassName,
-        entityName: ClassName,
-        updateEntityName: ClassName,
+    private fun UpdateFunSpec(
+        entity: ClassName,
+        updateEntity: ClassName,
         analysis: TableAnalysis
-    ) {
-
-        val updateFunction = FunSpec.builder("update")
-            .receiver(tableName)
-            .addParameter("entityId", analysis.primaryKey.kotlinType)
-            .addParameter("update", updateEntityName)
-            .returns(entityName)
+    ) =
+        FunSpec.builder("update")
+            .receiver(analysis.table)
+            .addParameter("id", analysis.primaryKey.kotlinType)
+            .addParameter("update", updateEntity)
+            .returns(entity)
             .addCode(
                 CodeBlock.builder()
-                    .add("return ")
-                    .addStatement(
-                        "%T.%M(where = { ${analysis.primaryKey.name} eq entityId }) {",
-                        tableName,
-                        MemberName("org.jetbrains.exposed.sql", "updateReturning")
+                    .beginControlFlow(
+                        "return %T.%M(where = { %T.${analysis.primaryKey.name} eq id }) {",
+                        analysis.table,
+                        MemberName("org.jetbrains.exposed.sql", "updateReturning"),
+                        analysis.table,
                     )
-                    .withIndent { insertAssignment(analysis) }
-                    .addStatement("}.map { row ->")
-                    .withIndent {
-                        addStatement("%T(", entityName)
-                        withIndent { entityConstructor(analysis) }
-                        addStatement(")")
-                    }
-                    .addStatement("}")
+                    .insertAssignment("update", analysis)
+                    .endControlFlow()
+                    .mapResultRow(analysis, entity)
                     .build()
             ).build()
 
-        fileBuilder.addFunction(updateFunction)
+    fun CodeBlock.Builder.mapResultRow(analysis: TableAnalysis, entity: ClassName) = apply {
+        beginControlFlow(".map { row ->")
+        addStatement("%T(", entity)
+        withIndent { entityConstructor(analysis) }
+        addStatement(")")
+        endControlFlow()
     }
 }
 
