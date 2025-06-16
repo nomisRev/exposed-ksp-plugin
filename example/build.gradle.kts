@@ -1,6 +1,7 @@
 plugins {
     kotlin("jvm") version "2.1.0"
     id("com.google.devtools.ksp") version "2.1.0-1.0.29"
+    application
 }
 
 repositories {
@@ -26,9 +27,17 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
+application {
+    mainClass.set("SimpleExampleKt")
+}
+
 kotlin {
     jvmToolchain(21)
     sourceSets.main {
         kotlin.srcDir("build/generated/ksp/main/kotlin")
     }
+}
+
+tasks.named("run") {
+    dependsOn("kspKotlin")
 }
