@@ -3,6 +3,7 @@ package org.jetbrains.exposed.crud.ksp
 import com.google.devtools.ksp.processing.*
 import com.google.devtools.ksp.symbol.*
 import com.squareup.kotlinpoet.*
+import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.ksp.writeTo
 
 class ExposedCrudProcessor(
@@ -292,11 +293,16 @@ class ExposedCrudProcessor(
     ) {
         // Add necessary imports for Exposed DSL
         fileBuilder.addImport("org.jetbrains.exposed.sql", "insert")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "batchInsert")
         fileBuilder.addImport("org.jetbrains.exposed.sql", "selectAll")
         fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "eq")
+        fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "inList")
         
         // Generate insert function
         generateInsertFunction(fileBuilder, tableName, entityName, newEntityName, analysis)
+        
+        // Generate insertAll function
+        generateInsertAllFunction(fileBuilder, tableName, entityName, newEntityName, analysis)
     }
     
     private fun generateInsertFunction(
@@ -348,6 +354,57 @@ class ExposedCrudProcessor(
             .build()
         
         fileBuilder.addFunction(insertFunction)
+    }
+    
+    private fun generateInsertAllFunction(
+        fileBuilder: FileSpec.Builder,
+        tableName: String,
+        entityName: String,
+        newEntityName: String,
+        analysis: TableAnalysis
+    ) {
+        val primaryKey = analysis.primaryKey
+        if (primaryKey == null) {
+            logger.error("Cannot generate insertAll function without primary key")
+            return
+        }
+        
+        val nonPrimaryColumns = analysis.columns.filter { it != analysis.primaryKey }
+        
+        // Build the batch insert assignments
+        val batchInsertAssignments = nonPrimaryColumns.joinToString("\n            ") { column ->
+            if (column.isNullable) {
+                "if (item.${column.name} != null) this[${column.name}] = item.${column.name}"
+            } else {
+                "this[${column.name}] = item.${column.name}"
+            }
+        }
+        
+        // Build the entity constructor call
+        val entityConstructor = analysis.columns.joinToString(",\n            ") { column ->
+            "row[${column.name}]"
+        }
+        
+        val insertAllFunction = FunSpec.builder("insertAll")
+            .receiver(ClassName("", tableName))
+            .addParameter("new", ClassName("kotlin.collections", "List").parameterizedBy(ClassName("", newEntityName)))
+            .returns(ClassName("kotlin.collections", "List").parameterizedBy(ClassName("", entityName)))
+            .addCode(
+                """
+                val insertedIds = batchInsert(new) { item ->
+                    $batchInsertAssignments
+                }.map { it[${primaryKey.name}] }
+                
+                return selectAll().where { ${primaryKey.name} inList insertedIds }.map { row ->
+                    $entityName(
+                        $entityConstructor
+                    )
+                }
+                """.trimIndent()
+            )
+            .build()
+        
+        fileBuilder.addFunction(insertAllFunction)
     }
 }
 

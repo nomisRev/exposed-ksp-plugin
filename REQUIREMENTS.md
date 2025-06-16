@@ -33,7 +33,7 @@ fun UsersTable.insert(name: String, email: String, age: Int? = null): User =
 It should do so for all CRUD operations:
 
 - [x] fun UsersTable.insert(new: NewUser): User
-- [ ] fun UsersTable.insertAll(new: List<NewUser>): List<User>
+- [x] fun UsersTable.insertAll(new: List<NewUser>): List<User>
 - [ ] fun UserTable.update(id: Int, update: UpdateUser): User
 - [ ] fun UsersTable.findByIdOrNull(id: Int): User?
 - [ ] fun UsersTable.findByEmailOrNull(email: String): User? // email is uniqueIndex so also generate find
