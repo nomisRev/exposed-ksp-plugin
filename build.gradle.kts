@@ -23,9 +23,6 @@ dependencies {
     // KotlinPoet for code generation
     implementation("com.squareup:kotlinpoet:2.2.0")
     implementation("com.squareup:kotlinpoet-ksp:2.2.0")
-    
-    testImplementation(kotlin("test"))
-    testImplementation("com.h2database:h2:2.2.224")
 }
 
 tasks.test {
