@@ -1,14 +1,11 @@
+package test.example
+
 import org.jetbrains.exposed.crud.ksp.ResultRowMapper
 import org.jetbrains.exposed.sql.Database
-import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.testcontainers.containers.PostgreSQLContainer
-import simple.example.NewSimpleUsers
-import simple.example.SimpleUsersTable
-import simple.example.insert
-import simple.example.insertAll
 
 // Define a data class and annotate it with @ResultRowMapper
 @ResultRowMapper(table = SimpleUsersTable::class)
