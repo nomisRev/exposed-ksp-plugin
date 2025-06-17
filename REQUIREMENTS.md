@@ -35,14 +35,14 @@ It should do so for all CRUD operations:
 - [x] fun UsersTable.insert(new: NewUser): User
 - [x] fun UsersTable.insertAll(new: List<NewUser>): List<User>
 - [x] fun UserTable.update(id: Int, update: UpdateUser): User
-- [ ] fun UsersTable.findByIdOrNull(id: Int): User?
-- [ ] fun UsersTable.findByEmailOrNull(email: String): User? // email is uniqueIndex so also generate find
-- [ ] fun UsersTable.existsById(id: Int)
-- [ ] fun UsersTable.existsByEmail(id: Int) // email is uniqueIndex so also generate exists
-- [ ] fun UsersTable.findAll(): List<User>
-- [ ] fun UsersTable.count(): Int
-- [ ] fun UsersTable.deleteById(id: Int): Boolean
-- [ ] fun UsersTable.deleteByEmail(email: String) // // email is uniqueIndex so also generate delete
-- [ ] fun UsersTable.deleteAll(): Unit
-- [ ] fun UsersTable.deleteAllById(id: Int)
-- [ ] fun UsersTable.deleteAllByEmail(id: Int) // email is uniqueIndex so also generate delete
+- [x] fun UsersTable.findByIdOrNull(id: Int): User?
+- [x] fun UsersTable.findByEmailOrNull(email: String): User? // email is uniqueIndex so also generate find
+- [x] fun UsersTable.existsById(id: Int)
+- [x] fun UsersTable.existsByEmail(id: Int) // email is uniqueIndex so also generate exists
+- [x] fun UsersTable.findAll(): List<User>
+- [x] fun UsersTable.count(): Int
+- [x] fun UsersTable.deleteById(id: Int): Boolean
+- [x] fun UsersTable.deleteByEmail(email: String) // // email is uniqueIndex so also generate delete
+- [x] fun UsersTable.deleteAll(): Unit
+- [x] fun UsersTable.deleteAllById(id: Int)
+- [x] fun UsersTable.deleteAllByEmail(id: Int) // email is uniqueIndex so also generate delete

@@ -5,6 +5,7 @@ import com.google.devtools.ksp.symbol.*
 import com.squareup.kotlinpoet.*
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
 import com.squareup.kotlinpoet.ksp.writeTo
+import kotlin.reflect.KClass
 
 class ExposedCrudProcessor(
     private val codeGenerator: CodeGenerator,
@@ -195,9 +196,53 @@ class ExposedCrudProcessor(
         fileBuilder.generateDataClasses(entity, newEntity, updateEntity, analysis)
 
         fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "eq")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "select")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "selectAll")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "count")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "deleteWhere")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "deleteAll")
+
+        // Insert and update functions
         fileBuilder.addFunction(InsertFunSpec(newEntity, analysis, entity))
         fileBuilder.addFunction(UpdateFunSpec(entity, updateEntity, analysis))
         fileBuilder.addFunction(BatchInsertFunSpec(entity, newEntity, analysis))
+
+        // Find functions
+        fileBuilder.addFunction(FindByIdOrNullFunSpec(entity, analysis))
+
+        // Generate findByXOrNull for unique index columns
+        for (uniqueColumn in analysis.uniqueIndexColumns) {
+            fileBuilder.addFunction(FindByUniqueColumnOrNullFunSpec(entity, analysis, uniqueColumn))
+        }
+
+        // Exists functions
+        fileBuilder.addFunction(ExistsByIdFunSpec(analysis))
+
+        // Generate existsByX for unique index columns
+        for (uniqueColumn in analysis.uniqueIndexColumns) {
+            fileBuilder.addFunction(ExistsByUniqueColumnFunSpec(analysis, uniqueColumn))
+        }
+
+        // FindAll and count functions
+        fileBuilder.addFunction(FindAllFunSpec(entity, analysis))
+        fileBuilder.addFunction(CountFunSpec(analysis))
+
+        // Delete functions
+        fileBuilder.addFunction(DeleteByIdFunSpec(analysis))
+
+        // Generate deleteByX for unique index columns
+        for (uniqueColumn in analysis.uniqueIndexColumns) {
+            fileBuilder.addFunction(DeleteByUniqueColumnFunSpec(analysis, uniqueColumn))
+        }
+
+        // DeleteAll function
+        fileBuilder.addFunction(DeleteAllFunSpec(analysis))
+        fileBuilder.addFunction(DeleteAllByIdFunSpec(analysis))
+
+        // Generate deleteAllByX for unique index columns
+        for (uniqueColumn in analysis.uniqueIndexColumns) {
+            fileBuilder.addFunction(DeleteAllByUniqueColumnFunSpec(analysis, uniqueColumn))
+        }
 
         val file = fileBuilder.build()
         file.writeTo(codeGenerator, Dependencies(false))
@@ -398,6 +443,170 @@ class ExposedCrudProcessor(
         }
         addStatement(")")
         endControlFlow()
+    }
+
+    private fun FindByIdOrNullFunSpec(entity: ClassName, analysis: TableAnalysis): FunSpec {
+        return FunSpec.builder("findByIdOrNull")
+            .receiver(analysis.table)
+            .addParameter("id", analysis.primaryKey.kotlinType)
+            .returns(entity.copy(nullable = true))
+            .addCode {
+                add(
+                    "return %T.%M().where { %T.${analysis.primaryKey.name} eq id }",
+                    analysis.table,
+                    MemberName("org.jetbrains.exposed.sql", "selectAll"),
+                    analysis.table
+                )
+                mapResultRow(analysis, entity)
+                addStatement(".singleOrNull()")
+            }
+            .build()
+    }
+
+    private fun FindByUniqueColumnOrNullFunSpec(
+        entity: ClassName,
+        analysis: TableAnalysis,
+        column: ColumnInfo
+    ): FunSpec {
+        val capitalizedColumnName = column.name.replaceFirstChar { it.uppercase() }
+        return FunSpec.builder("findBy${capitalizedColumnName}OrNull")
+            .receiver(analysis.table)
+            .addParameter(column.name, column.kotlinType)
+            .returns(entity.copy(nullable = true))
+            .addCode {
+                add(
+                    "return %T.selectAll().where { %T.${column.name} eq ${column.name} }",
+                    analysis.table,
+                    analysis.table
+                )
+                mapResultRow(analysis, entity)
+                addStatement(".singleOrNull()")
+            }
+            .build()
+    }
+
+    private fun ExistsByIdFunSpec(analysis: TableAnalysis): FunSpec {
+        return FunSpec.builder("existsById")
+            .receiver(analysis.table)
+            .addParameter("id", analysis.primaryKey.kotlinType)
+            .returns(BOOLEAN)
+            .addCode {
+                addStatement(
+                    "return %T.selectAll().where { %T.${analysis.primaryKey.name} eq id }.limit(1).count() > 0",
+                    analysis.table,
+                    analysis.table
+                )
+            }
+            .build()
+    }
+
+    private fun ExistsByUniqueColumnFunSpec(analysis: TableAnalysis, column: ColumnInfo): FunSpec {
+        val capitalizedColumnName = column.name.replaceFirstChar { it.uppercase() }
+        return FunSpec.builder("existsBy$capitalizedColumnName")
+            .receiver(analysis.table)
+            .addParameter(column.name, column.kotlinType)
+            .returns(BOOLEAN)
+            .addCode {
+                addStatement(
+                    "return %T.selectAll().where { %T.${column.name} eq ${column.name} }.limit(1).count() > 0",
+                    analysis.table,
+                    analysis.table
+                )
+            }
+            .build()
+    }
+
+    private fun FindAllFunSpec(entity: ClassName, analysis: TableAnalysis): FunSpec {
+        return FunSpec.builder("findAll")
+            .receiver(analysis.table)
+            .returns(LIST.parameterizedBy(entity))
+            .addCode {
+                addStatement("return %T.selectAll()", analysis.table)
+                mapResultRow(analysis, entity)
+            }
+            .build()
+    }
+
+    private fun CountFunSpec(analysis: TableAnalysis): FunSpec {
+        return FunSpec.builder("count")
+            .receiver(analysis.table)
+            .returns(LONG)
+            .addCode {
+                addStatement("return %T.selectAll().count()", analysis.table)
+            }
+            .build()
+    }
+
+    private fun DeleteByIdFunSpec(analysis: TableAnalysis): FunSpec {
+        return FunSpec.builder("deleteById")
+            .receiver(analysis.table)
+            .addParameter("id", analysis.primaryKey.kotlinType)
+            .returns(BOOLEAN)
+            .addCode {
+                addStatement(
+                    "return %T.deleteWhere { %T.${analysis.primaryKey.name} eq id } > 0",
+                    analysis.table,
+                    analysis.table
+                )
+            }
+            .build()
+    }
+
+    private fun DeleteByUniqueColumnFunSpec(analysis: TableAnalysis, column: ColumnInfo): FunSpec {
+        val capitalizedColumnName = column.name.replaceFirstChar { it.uppercase() }
+        return FunSpec.builder("deleteBy$capitalizedColumnName")
+            .receiver(analysis.table)
+            .addParameter(column.name, column.kotlinType)
+            .returns(BOOLEAN)
+            .addCode {
+                addStatement(
+                    "return %T.deleteWhere { %T.${column.name} eq ${column.name} } > 0",
+                    analysis.table,
+                    analysis.table
+                )
+            }
+            .build()
+    }
+
+    private fun DeleteAllFunSpec(analysis: TableAnalysis): FunSpec {
+        return FunSpec.builder("deleteAll")
+            .receiver(analysis.table)
+            .returns(UNIT)
+            .addCode {
+                addStatement("%T.deleteAll()", analysis.table)
+            }
+            .build()
+    }
+
+    private fun DeleteAllByIdFunSpec(analysis: TableAnalysis): FunSpec {
+        return FunSpec.builder("deleteAllById")
+            .receiver(analysis.table)
+            .addParameter("id", analysis.primaryKey.kotlinType)
+            .returns(UNIT)
+            .addCode {
+                addStatement(
+                    "%T.deleteWhere { %T.${analysis.primaryKey.name} eq id }",
+                    analysis.table,
+                    analysis.table
+                )
+            }
+            .build()
+    }
+
+    private fun DeleteAllByUniqueColumnFunSpec(analysis: TableAnalysis, column: ColumnInfo): FunSpec {
+        val capitalizedColumnName = column.name.replaceFirstChar { it.uppercase() }
+        return FunSpec.builder("deleteAllBy$capitalizedColumnName")
+            .receiver(analysis.table)
+            .addParameter(column.name, column.kotlinType)
+            .returns(UNIT)
+            .addCode {
+                addStatement(
+                    "%T.deleteWhere { %T.${column.name} eq ${column.name} }",
+                    analysis.table,
+                    analysis.table
+                )
+            }
+            .build()
     }
 }
 
