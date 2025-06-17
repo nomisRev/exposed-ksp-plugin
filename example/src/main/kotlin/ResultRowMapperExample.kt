@@ -5,6 +5,10 @@ import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.testcontainers.containers.PostgreSQLContainer
+import simple.example.NewSimpleUsers
+import simple.example.SimpleUsersTable
+import simple.example.insert
+import simple.example.insertAll
 
 // Define a data class and annotate it with @ResultRowMapper
 @ResultRowMapper(table = SimpleUsersTable::class)
@@ -24,20 +28,13 @@ fun main() {
 
         println("=== ResultRowMapper Example ===\n")
 
-        // Insert some test data
-        val newUser = NewSimpleUsers(
-            name = "John Doe",
-            email = "john@example.com"
+        SimpleUsersTable.insertAll(
+            listOf(
+                NewSimpleUsers(name = "John Doe", email = "john@example.com"),
+                NewSimpleUsers(name = "Jane Smith", email = "jane@example.com")
+            )
         )
-        SimpleUsersTable.insert(newUser)
 
-        val newUser2 = NewSimpleUsers(
-            name = "Jane Smith",
-            email = "jane@example.com"
-        )
-        SimpleUsersTable.insert(newUser2)
-
-        // Use the generated extension functions
         val allRows = SimpleUsersTable.selectAll()
 
         // Convert a single ResultRow to SimpleUser

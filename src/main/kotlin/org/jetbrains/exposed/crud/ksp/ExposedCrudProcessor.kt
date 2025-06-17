@@ -15,12 +15,259 @@ class ExposedCrudProcessor(
     private val logger: KSPLogger
 ) : SymbolProcessor {
 
+    private fun processTableForRepository(tableClass: KSClassDeclaration) {
+        try {
+            val tableName = ClassName(tableClass.packageName.asString(), tableClass.simpleName.asString())
+            val tableAnalysis = analyzeTable(tableName, tableClass)
+
+            logger.info("Processing table for repository: $tableName")
+
+            generateRepositoryCode(tableAnalysis)
+
+        } catch (e: Exception) {
+            logger.error("Error processing table for repository ${tableClass.simpleName.asString()}: ${e.message}")
+            e.printStackTrace()
+            throw e
+        }
+    }
+
+    private fun generateRepositoryCode(analysis: TableAnalysis) {
+        val entity = ClassName(analysis.packageName, analysis.table.simpleName.removeSuffix("Table"))
+        val newEntity = ClassName(analysis.packageName, "New${entity.simpleName}")
+        val updateEntity = ClassName(analysis.packageName, "Update${entity.simpleName}")
+        val repositoryName = "${entity.simpleName}Repository"
+
+        // Use the table name in the file name to avoid conflicts
+        val fileBuilder = FileSpec.builder(analysis.packageName, "${analysis.table.simpleName}Repository")
+
+        val needsBigDecimal = analysis.columns.any {
+            it.kotlinType.toString().contains("BigDecimal")
+        }
+        if (needsBigDecimal) {
+            fileBuilder.addImport("java.math", "BigDecimal")
+        }
+
+        // Add imports
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "Database")
+        fileBuilder.addImport("org.jetbrains.exposed.sql.transactions", "transaction")
+        fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "eq")
+        fileBuilder.addImport("org.jetbrains.exposed.sql.SqlExpressionBuilder", "inList")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "insertReturning")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "updateReturning")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "batchInsert")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "selectAll")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "count")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "deleteWhere")
+        fileBuilder.addImport("org.jetbrains.exposed.sql", "deleteAll")
+
+        // Generate data classes
+        fileBuilder.generateDataClasses(entity, newEntity, updateEntity, analysis)
+
+        // Generate repository interface
+        val repositoryInterface = TypeSpec.interfaceBuilder(repositoryName)
+            .addFunction(FunSpec.builder("insert")
+                .addParameter("new", newEntity)
+                .returns(entity)
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("insertAll")
+                .addParameter("new", LIST.parameterizedBy(newEntity))
+                .returns(LIST.parameterizedBy(entity))
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("update")
+                .addParameter("id", analysis.primaryKey.kotlinType)
+                .addParameter("update", updateEntity)
+                .returns(entity)
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("findByIdOrNull")
+                .addParameter("id", analysis.primaryKey.kotlinType)
+                .returns(entity.copy(nullable = true))
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("existsById")
+                .addParameter("id", analysis.primaryKey.kotlinType)
+                .returns(BOOLEAN)
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("deleteById")
+                .addParameter("id", analysis.primaryKey.kotlinType)
+                .returns(BOOLEAN)
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("deleteAll")
+                .returns(INT)
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("deleteAll")
+                .addParameter("ids", LIST.parameterizedBy(analysis.primaryKey.kotlinType))
+                .returns(INT)
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("findAll")
+                .returns(LIST.parameterizedBy(entity))
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .addFunction(FunSpec.builder("count")
+                .returns(LONG)
+                .addModifiers(KModifier.ABSTRACT)
+                .build())
+            .build()
+
+        fileBuilder.addType(repositoryInterface)
+
+        // Generate repository implementation factory function
+        val factoryFunction = FunSpec.builder(repositoryName)
+            .addParameter("database", ClassName("org.jetbrains.exposed.sql", "Database"))
+            .returns(ClassName(analysis.packageName, repositoryName))
+            .addCode {
+                beginControlFlow("return object : %T", ClassName(analysis.packageName, repositoryName))
+
+                // Insert implementation
+                beginControlFlow("override fun insert(new: %T): %T", newEntity, entity)
+                addStatement("return transaction(database) {")
+                withIndent {
+                    beginControlFlow("%T.insertReturning {", analysis.table)
+                    for (column in analysis.nonPrimaryColumns) {
+                        if (column.isNullable) {
+                            addStatement("if (new.${column.name} != null) it[%T.${column.name}] = new.${column.name}", analysis.table)
+                        } else {
+                            addStatement("it[%T.${column.name}] = new.${column.name}", analysis.table)
+                        }
+                    }
+                    endControlFlow()
+                    mapResultRow(analysis, entity)
+                    addStatement(".single()")
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // InsertAll implementation
+                beginControlFlow("override fun insertAll(new: %T): %T", LIST.parameterizedBy(newEntity), LIST.parameterizedBy(entity))
+                addStatement("return transaction(database) {")
+                withIndent {
+                    beginControlFlow("%T.batchInsert(new) { item: %T ->", analysis.table, newEntity)
+                    for (column in analysis.nonPrimaryColumns) {
+                        if (column.isNullable) {
+                            addStatement("if (item.${column.name} != null) this[%T.${column.name}] = item.${column.name}", analysis.table)
+                        } else {
+                            addStatement("this[%T.${column.name}] = item.${column.name}", analysis.table)
+                        }
+                    }
+                    endControlFlow()
+                    mapResultRow(analysis, entity)
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // Update implementation
+                beginControlFlow("override fun update(id: %T, update: %T): %T", analysis.primaryKey.kotlinType, updateEntity, entity)
+                addStatement("return transaction(database) {")
+                withIndent {
+                    beginControlFlow("%T.updateReturning(where = { %T.${analysis.primaryKey.name} eq id }) {", analysis.table, analysis.table)
+                    for (column in analysis.nonPrimaryColumns) {
+                        addStatement("if (update.${column.name} != null) it[%T.${column.name}] = update.${column.name}", analysis.table)
+                    }
+                    endControlFlow()
+                    mapResultRow(analysis, entity)
+                    addStatement(".single()")
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // FindByIdOrNull implementation
+                beginControlFlow("override fun findByIdOrNull(id: %T): %T", analysis.primaryKey.kotlinType, entity.copy(nullable = true))
+                addStatement("return transaction(database) {")
+                withIndent {
+                    add("%T.selectAll().where { %T.${analysis.primaryKey.name} eq id }", analysis.table, analysis.table)
+                    mapResultRow(analysis, entity)
+                    addStatement(".singleOrNull()")
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // ExistsById implementation
+                beginControlFlow("override fun existsById(id: %T): %T", analysis.primaryKey.kotlinType, BOOLEAN)
+                addStatement("return transaction(database) {")
+                withIndent {
+                    addStatement("%T.selectAll().where { %T.${analysis.primaryKey.name} eq id }.limit(1).count() > 0", analysis.table, analysis.table)
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // DeleteById implementation
+                beginControlFlow("override fun deleteById(id: %T): %T", analysis.primaryKey.kotlinType, BOOLEAN)
+                addStatement("return transaction(database) {")
+                withIndent {
+                    addStatement("%T.deleteWhere { %T.${analysis.primaryKey.name} eq id } > 0", analysis.table, analysis.table)
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // DeleteAll implementation
+                beginControlFlow("override fun deleteAll(): %T", INT)
+                addStatement("return transaction(database) {")
+                withIndent {
+                    addStatement("val count = %T.selectAll().count().toInt()", analysis.table)
+                    addStatement("%T.deleteAll()", analysis.table)
+                    addStatement("count")
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // DeleteAll by ids implementation
+                beginControlFlow("override fun deleteAll(ids: %T): %T", LIST.parameterizedBy(analysis.primaryKey.kotlinType), INT)
+                addStatement("return transaction(database) {")
+                withIndent {
+                    addStatement("%T.deleteWhere { %T.${analysis.primaryKey.name} inList ids }", analysis.table, analysis.table)
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // FindAll implementation
+                beginControlFlow("override fun findAll(): %T", LIST.parameterizedBy(entity))
+                addStatement("return transaction(database) {")
+                withIndent {
+                    addStatement("%T.selectAll()", analysis.table)
+                    mapResultRow(analysis, entity)
+                }
+                addStatement("}")
+                endControlFlow()
+
+                // Count implementation
+                beginControlFlow("override fun count(): %T", LONG)
+                addStatement("return transaction(database) {")
+                withIndent {
+                    addStatement("%T.selectAll().count()", analysis.table)
+                }
+                addStatement("}")
+                endControlFlow()
+
+                endControlFlow()
+            }
+            .build()
+
+        fileBuilder.addFunction(factoryFunction)
+
+        val file = fileBuilder.build()
+        file.writeTo(codeGenerator, Dependencies(false))
+    }
+
     override fun process(resolver: Resolver): List<KSAnnotated> {
         // Process tables with GenerateCrud annotation
         val tableSymbols = resolver.getSymbolsWithAnnotation("org.jetbrains.exposed.crud.ksp.GenerateCrud")
         tableSymbols.forEach { symbol ->
             if (symbol is KSClassDeclaration) {
                 processTable(symbol)
+            }
+        }
+
+        // Process tables with GenerateRepository annotation
+        val repoTableSymbols = resolver.getSymbolsWithAnnotation("org.jetbrains.exposed.crud.ksp.GenerateRepository")
+        repoTableSymbols.forEach { symbol ->
+            if (symbol is KSClassDeclaration) {
+                processTableForRepository(symbol)
             }
         }
 
@@ -47,6 +294,8 @@ class ExposedCrudProcessor(
 
         } catch (e: Exception) {
             logger.error("Error processing table ${tableClass.simpleName.asString()}: ${e.message}")
+            e.printStackTrace()
+            throw e
         }
     }
 
@@ -76,6 +325,8 @@ class ExposedCrudProcessor(
 
         } catch (e: Exception) {
             logger.error("Error processing data class ${dataClass.simpleName.asString()}: ${e.message}")
+            e.printStackTrace()
+            throw e
         }
     }
 
@@ -96,7 +347,7 @@ class ExposedCrudProcessor(
             .build()
 
         // Write the generated code to a file
-        fileSpec.writeTo(codeGenerator, false)
+        fileSpec.writeTo(codeGenerator, Dependencies(false))
 
         logger.info("Generated ResultRow mapper for ${className.simpleName}")
     }
@@ -282,10 +533,11 @@ class ExposedCrudProcessor(
 
     private fun generateCrudCode(analysis: TableAnalysis) {
         val entity = ClassName(analysis.packageName, analysis.table.simpleName.removeSuffix("Table"))
-        val newEntity = ClassName(analysis.packageName, "New$entity")
-        val updateEntity = ClassName(analysis.packageName, "Update$entity")
+        val newEntity = ClassName(analysis.packageName, "New${entity.simpleName}")
+        val updateEntity = ClassName(analysis.packageName, "Update${entity.simpleName}")
 
-        val fileBuilder = FileSpec.builder(analysis.packageName, "${entity}Crud")
+        // Use the table name in the file name to avoid conflicts
+        val fileBuilder = FileSpec.builder(analysis.packageName, "${analysis.table.simpleName}Crud")
 
         val needsBigDecimal = analysis.columns.any {
             it.kotlinType.toString().contains("BigDecimal")
