@@ -4,8 +4,10 @@ import com.google.devtools.ksp.processing.*
 import com.google.devtools.ksp.symbol.*
 import com.squareup.kotlinpoet.*
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
+import com.squareup.kotlinpoet.ksp.toClassName
 import com.squareup.kotlinpoet.ksp.writeTo
 import org.jetbrains.exposed.dao.Entity
+import org.jetbrains.exposed.sql.ResultRow
 import kotlin.reflect.KClass
 
 class ExposedCrudProcessor(
@@ -14,11 +16,19 @@ class ExposedCrudProcessor(
 ) : SymbolProcessor {
 
     override fun process(resolver: Resolver): List<KSAnnotated> {
+        // Process tables with GenerateCrud annotation
         val tableSymbols = resolver.getSymbolsWithAnnotation("org.jetbrains.exposed.crud.ksp.GenerateCrud")
-
         tableSymbols.forEach { symbol ->
             if (symbol is KSClassDeclaration) {
                 processTable(symbol)
+            }
+        }
+
+        // Process data classes with ResultRowMapper annotation
+        val dataClassSymbols = resolver.getSymbolsWithAnnotation("org.jetbrains.exposed.crud.ksp.ResultRowMapper")
+        dataClassSymbols.forEach { symbol ->
+            if (symbol is KSClassDeclaration) {
+                processDataClass(symbol)
             }
         }
 
@@ -38,6 +48,97 @@ class ExposedCrudProcessor(
         } catch (e: Exception) {
             logger.error("Error processing table ${tableClass.simpleName.asString()}: ${e.message}")
         }
+    }
+
+    private fun processDataClass(dataClass: KSClassDeclaration) {
+        try {
+            val className = dataClass.toClassName()
+            logger.info("Processing data class: $className")
+
+            // Get the table class from the annotation
+            val annotation = dataClass.annotations.find {
+                it.shortName.asString() == "ResultRowMapper"
+            }
+                ?: throw IllegalStateException("ResultRowMapper annotation not found on ${dataClass.simpleName.asString()}")
+
+            val tableClassArg = annotation.arguments.find {
+                it.name?.asString() == "table"
+            } ?: throw IllegalStateException("table parameter not found in ResultRowMapper annotation")
+
+            val tableClassValue = tableClassArg.value as KSType
+            val tableClassName = tableClassValue.declaration.qualifiedName?.asString()
+                ?: throw IllegalStateException("Could not resolve table class name")
+
+            val tableClass = ClassName.bestGuess(tableClassName)
+
+            // Generate extension functions for ResultRow and Iterable<ResultRow>
+            generateResultRowMapperCode(className, dataClass, tableClass)
+
+        } catch (e: Exception) {
+            logger.error("Error processing data class ${dataClass.simpleName.asString()}: ${e.message}")
+        }
+    }
+
+    private fun generateResultRowMapperCode(
+        className: ClassName,
+        dataClass: KSClassDeclaration,
+        tableClass: ClassName
+    ) {
+        // Get all properties of the data class
+        val properties = dataClass.getAllProperties().toList()
+
+        // Create a file with extension functions
+        val fileName = "${className.simpleName}ResultRowMapper"
+        val fileSpec = FileSpec.builder(className.packageName, fileName)
+            .addImport("org.jetbrains.exposed.sql", "ResultRow")
+            .addFunction(generateToDataClassFunction(className, properties, tableClass))
+            .addFunction(generateIterableToDataClassFunction(className))
+            .build()
+
+        // Write the generated code to a file
+        fileSpec.writeTo(codeGenerator, false)
+
+        logger.info("Generated ResultRow mapper for ${className.simpleName}")
+    }
+
+    private fun generateToDataClassFunction(
+        className: ClassName,
+        properties: List<KSPropertyDeclaration>,
+        tableClass: ClassName
+    ): FunSpec {
+        val functionName = "to${className.simpleName}"
+
+        return FunSpec.builder(functionName)
+            .receiver(ClassName("org.jetbrains.exposed.sql", "ResultRow"))
+            .returns(className)
+            .addCode {
+                add("return ")
+                addStatement("%T(", className)
+                withIndent {
+                    properties.forEach { property ->
+                        val propertyName = property.simpleName.asString()
+                        addStatement("$propertyName = this[%T.$propertyName],", tableClass)
+                    }
+                }
+                addStatement(")")
+            }
+            .build()
+    }
+
+    private fun generateIterableToDataClassFunction(className: ClassName): FunSpec {
+        val functionName = "to${className.simpleName}"
+        val iterableOfResultRow = ClassName("kotlin.collections", "Iterable")
+            .parameterizedBy(ClassName("org.jetbrains.exposed.sql", "ResultRow"))
+        val listOfDataClass = ClassName("kotlin.collections", "List")
+            .parameterizedBy(className)
+
+        return FunSpec.builder(functionName)
+            .receiver(iterableOfResultRow)
+            .returns(listOfDataClass)
+            .addCode {
+                addStatement("return map { row -> row.to${className.simpleName}() }")
+            }
+            .build()
     }
 
     private fun analyzeTable(table: ClassName, tableClass: KSClassDeclaration): TableAnalysis {
@@ -438,10 +539,8 @@ class ExposedCrudProcessor(
         beginControlFlow(".map { row ->")
         addStatement("%T(", entity)
         withIndent {
-            for (column in analysis.columns) this@withIndent.addStatement(
-                "${column.name} = row[%T.${column.name}],",
-                analysis.table
-            )
+            for (column in analysis.columns)
+                addStatement("${column.name} = row[%T.${column.name}],", analysis.table)
         }
         addStatement(")")
         endControlFlow()
@@ -591,7 +690,9 @@ class ExposedCrudProcessor(
     private fun DeleteAllByEntityFunSpec(entity: ClassName, analysis: TableAnalysis): FunSpec =
         FunSpec.builder("deleteAll")
             .receiver(analysis.table)
-            .addAnnotation(AnnotationSpec.builder(JvmName::class).addMember("\"deleteAll${entity.simpleName}\"").build())
+            .addAnnotation(
+                AnnotationSpec.builder(JvmName::class).addMember("\"deleteAll${entity.simpleName}\"").build()
+            )
             .addParameter("values", LIST.parameterizedBy(entity))
             .returns(INT)
             .addCode("return deleteAll(values.map { it.${analysis.primaryKey.name} })")
