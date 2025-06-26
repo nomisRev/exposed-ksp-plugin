@@ -13,4 +13,4 @@ import kotlin.reflect.KClass
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.SOURCE)
-annotation class ResultRowMapper(val table: KClass<*>)
+public annotation class ResultRowMapper(public val table: KClass<*>)

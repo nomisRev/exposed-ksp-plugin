@@ -10,4 +10,4 @@ package org.jetbrains.exposed.crud.ksp
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.SOURCE)
-annotation class GenerateRepository
+public annotation class GenerateRepository

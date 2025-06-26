@@ -1,6 +1,3 @@
-// This file is commented out to avoid build errors
-// It will be uncommented once the code generation is working
-
 package test.example
 
 import org.jetbrains.exposed.crud.ksp.GenerateRepository
