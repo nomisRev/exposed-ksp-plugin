@@ -5,7 +5,7 @@ exposed = "0.61.0"
 kotlinpoet = "2.2.0"
 h2 = "2.2.224"
 postgresql = "42.7.2"
-testcontainers = "1.19.7"
+testcontainers = "1.21.4"
 
 [libraries]
 # KSP
