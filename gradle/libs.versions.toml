@@ -1,7 +1,7 @@
 [versions]
 kotlin = "2.1.21"
 ksp = "2.1.21-2.0.2"
-exposed = "0.61.0"
+exposed = "1.0.0"
 kotlinpoet = "2.2.0"
 h2 = "2.2.224"
 postgresql = "42.7.2"
